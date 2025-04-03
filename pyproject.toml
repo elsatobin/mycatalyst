@@ -1,0 +1,22 @@
+[project]
+name = "catalyst-orm"
+dynamic = ["version"]
+description = "catalyst is a typesafe python query builder"
+readme = "README.md"
+authors = [
+    { name = "Karol Broda", email = "me@karolbroda.com" }
+]
+requires-python = ">=3.10"
+dependencies = []
+
+# ---- build start ----
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "catalyst_orm.__version__"}
+# ---- build end ----
