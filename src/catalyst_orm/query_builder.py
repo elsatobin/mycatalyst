@@ -14,6 +14,7 @@ from typing import (
     TypeVar,
     Union,
     cast,
+    overload,
 )
 
 from catalyst_orm.connection_interface import (
@@ -22,12 +23,18 @@ from catalyst_orm.connection_interface import (
     FunctionConnectionProvider,
 )
 
-from .conditions import Condition, and_, or_
-from .postgres.tables import PgTable, _Column
+from .conditions import Condition, and_
+from .postgres.tables import PgTable, _Column, TableT
 
 T = TypeVar("T")
 R = TypeVar("R")
 ModelT = TypeVar("ModelT")
+T_Row = TypeVar("T_Row")
+T1 = TypeVar("T1")
+T2 = TypeVar("T2")
+T3 = TypeVar("T3")
+T4 = TypeVar("T4")
+T5 = TypeVar("T5")
 
 
 class QueryResult(Generic[R]):
@@ -55,29 +62,18 @@ class Query(Generic[R]):
         self._conditions: List[Condition] = []
         self._model_class: Optional[Type[Any]] = None
 
-    def where(self, condition: Condition) -> "Query[R]":
-        self._conditions.append(condition)
-        return self
-
-    def and_where(self, condition: Condition) -> "Query[R]":
-        if not self._conditions:
-            return self.where(condition)
-
-        current_condition = self._conditions.pop()
-        self._conditions.append(and_(current_condition, condition))
-        return self
-
-    def or_where(self, condition: Condition) -> "Query[R]":
-        if not self._conditions:
-            return self.where(condition)
-
-        current_condition = self._conditions.pop()
-        self._conditions.append(or_(current_condition, condition))
+    def where(self, *conditions: Condition) -> "Query[R]":
+        if not conditions:
+            return self
+        if len(conditions) == 1:
+            self._conditions.append(conditions[0])
+        else:
+            self._conditions.append(and_(*conditions))
         return self
 
     def build_where_clause(self) -> Tuple[str, List[Any]]:
         """
-        Build the WHERE clause for the query, fixing table name references.
+        Build the WHERE clause for the query.
 
         Returns:
             Tuple[str, List[Any]]: SQL WHERE clause string and parameters
@@ -85,34 +81,14 @@ class Query(Generic[R]):
         if not self._conditions:
             return "", []
 
+        # there will always be a single root condition
         condition = self._conditions[0]
-        for i in range(1, len(self._conditions)):
-            condition = and_(condition, self._conditions[i])
 
         sql, params = condition.build()
 
-        import re
-
-        table_names = []
-        if not hasattr(self, "_tables"):
-            self._tables = []
-
-        for table in self._tables:
-            if hasattr(table, "__tablename__"):
-                table_names.append(table.__tablename__)
-            elif hasattr(table, "name"):
-                name_str = str(table.name)
-                if "." in name_str:
-                    table_names.append(name_str.split(".")[0])
-                else:
-                    table_names.append(name_str)
-
-        for table_name in table_names:
-            pattern = rf"{re.escape(table_name)}\.([^.]+)\.([^. =<>!]+)"
-            replacement = rf"{table_name}.\2"
-            sql = re.sub(pattern, replacement, sql)
-
         if sql:
+            if not sql.startswith("("):
+                sql = f"({sql})"
             return f" WHERE {sql}", params
         return "", params
 
@@ -193,7 +169,7 @@ class Query(Generic[R]):
         return query_sql
 
 
-class SelectQuery(Query[List[Dict[str, Any]]]):
+class SelectQuery(Query[List[T_Row]], Generic[T_Row]):
     def __init__(self, connection_provider: Callable):
         super().__init__(connection_provider)
         self._tables: List[PgTable] = []
@@ -206,56 +182,58 @@ class SelectQuery(Query[List[Dict[str, Any]]]):
         self._join_params: List[Any] = []
         self._with_relations: List[str] = []
 
-    def select(self, *columns: Union[str, _Column[Any]]) -> "SelectQuery":
+    def select(self, *columns: Union[str, _Column[Any]]) -> "SelectQuery[T_Row]":
         self._columns = list(columns) if columns else ["*"]
         return self
 
-    def from_(self, table: PgTable) -> "SelectQuery":
+    def from_(self, table: PgTable) -> "SelectQuery[T_Row]":
         self._tables.append(table)
         return self
 
-    def limit(self, limit: int) -> "SelectQuery":
+    def limit(self, limit: int) -> "SelectQuery[T_Row]":
         if limit < 0:
             raise ValueError("LIMIT cannot be negative")
         self._limit = limit
         return self
 
-    def offset(self, offset: int) -> "SelectQuery":
+    def offset(self, offset: int) -> "SelectQuery[T_Row]":
         if offset < 0:
             raise ValueError("OFFSET cannot be negative")
         self._offset = offset
         return self
 
-    def order_by(self, column: _Column[Any], direction: str = "ASC") -> "SelectQuery":
+    def order_by(
+        self, column: _Column[Any], direction: str = "ASC"
+    ) -> "SelectQuery[T_Row]":
         direction = direction.upper()
         if direction not in ("ASC", "DESC"):
             raise ValueError("Direction must be either 'ASC' or 'DESC'")
         self._order_by.append((column, direction))
         return self
 
-    def group_by(self, column: _Column[Any]) -> "SelectQuery":
+    def group_by(self, column: _Column[Any]) -> "SelectQuery[T_Row]":
         self._group_by.append(column)
         return self
 
-    def join(self, table: PgTable, condition: Condition) -> "SelectQuery":
+    def join(self, table: PgTable, condition: Condition) -> "SelectQuery[T_Row]":
         sql, params = condition.build()
-        self._join_clauses.append(f"INNER JOIN {table.name} ON {sql}")
+        self._join_clauses.append(f"INNER JOIN {table._alias} ON {sql}")
         self._join_params.extend(params)
         return self
 
-    def left_join(self, table: PgTable, condition: Condition) -> "SelectQuery":
+    def left_join(self, table: PgTable, condition: Condition) -> "SelectQuery[T_Row]":
         sql, params = condition.build()
-        self._join_clauses.append(f"LEFT JOIN {table.name} ON {sql}")
+        self._join_clauses.append(f"LEFT JOIN {table._alias} ON {sql}")
         self._join_params.extend(params)
         return self
 
-    def right_join(self, table: PgTable, condition: Condition) -> "SelectQuery":
+    def right_join(self, table: PgTable, condition: Condition) -> "SelectQuery[T_Row]":
         sql, params = condition.build()
-        self._join_clauses.append(f"RIGHT JOIN {table.name} ON {sql}")
+        self._join_clauses.append(f"RIGHT JOIN {table._alias} ON {sql}")
         self._join_params.extend(params)
         return self
 
-    def with_(self, *relations) -> "SelectQuery":
+    def with_(self, *relations) -> "SelectQuery[T_Row]":
         for relation in relations:
             if isinstance(relation, str):
                 self._with_relations.append(relation)
@@ -263,7 +241,7 @@ class SelectQuery(Query[List[Dict[str, Any]]]):
                 self._with_relations.append(relation.relation_name)
         return self
 
-    def load_relation(self, relation) -> "SelectQuery":
+    def load_relation(self, relation) -> "SelectQuery[T_Row]":
         if not self._tables:
             raise ValueError("No source table specified for relation query")
 
@@ -274,7 +252,7 @@ class SelectQuery(Query[List[Dict[str, Any]]]):
             relation_obj = source_table._relations.get(relation_name)
             if relation_obj is None:
                 raise ValueError(
-                    f"Relation '{relation_name}' not found on table {source_table.name}"
+                    f"Relation '{relation_name}' not found on table {source_table._alias}"
                 )
         else:
             relation_obj = relation.relation
@@ -292,6 +270,10 @@ class SelectQuery(Query[List[Dict[str, Any]]]):
             self.join(target_table, condition)
 
         return self
+
+    def map_to(self, model_class: Type[ModelT]) -> "SelectQuery[ModelT]":
+        self._model_class = model_class
+        return cast("SelectQuery[ModelT]", self)
 
     def build(self) -> Tuple[str, List[Any]]:
         if not self._tables:
@@ -392,7 +374,7 @@ class SelectQuery(Query[List[Dict[str, Any]]]):
 
         return query, all_params
 
-    def _process_results(self, cursor: Any) -> List[Dict[str, Any]]:
+    def _process_results(self, cursor: Any) -> List[T_Row]:
         results = cursor.fetchall()
 
         if not results:
@@ -402,14 +384,14 @@ class SelectQuery(Query[List[Dict[str, Any]]]):
             [desc[0] for desc in cursor.description] if cursor.description else []
         )
 
-        rows = []
-        for row in results:
-            row_dict = {}
-            for i, value in enumerate(row):
-                if i < len(column_names):
-                    row_dict[column_names[i]] = value
+        if self._model_class is not None:
+            rows = []
+            for row in results:
+                row_dict = {}
+                for i, value in enumerate(row):
+                    if i < len(column_names):
+                        row_dict[column_names[i]] = value
 
-            if self._model_class is not None:
                 try:
                     model_instance = self._model_class(**row_dict)
                     rows.append(model_instance)
@@ -417,10 +399,11 @@ class SelectQuery(Query[List[Dict[str, Any]]]):
                     raise ValueError(
                         f"Failed to map row to {self._model_class.__name__}: {e}"
                     )
-            else:
-                rows.append(row_dict)
-
-        return rows
+            return rows  # type: ignore[return-value]
+        else:
+            if cursor.description and len(cursor.description) == 1:
+                return [row[0] for row in results]  # type: ignore[return-value]
+            return results  # type: ignore[return-value]
 
 
 class InsertQuery(Query[Any]):
@@ -446,7 +429,7 @@ class InsertQuery(Query[Any]):
         placeholders = ["%s"] * len(columns)
         values = [self._values[col] for col in columns]
 
-        query = f"INSERT INTO {self._table.name} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
+        query = f"INSERT INTO {self._table._alias} ({', '.join(columns)}) VALUES ({', '.join(placeholders)})"
 
         if self._returning:
             returning_parts = []
@@ -456,7 +439,7 @@ class InsertQuery(Query[Any]):
                         raise ValueError(
                             "Column table cannot be None when building RETURNING clause"
                         )
-                    returning_parts.append(f"{col.table.name}.{col.name}")
+                    returning_parts.append(f"{col.table._alias}.{col.name}")
                 else:
                     returning_parts.append(str(col))
             query += f" RETURNING {', '.join(returning_parts)}"
@@ -469,20 +452,20 @@ class InsertQuery(Query[Any]):
             if result is None:
                 return None
 
-            if len(result) == 1:
-                return result[0]
-
-            column_names = [desc[0] for desc in cursor.description]
-            row_dict = {column_names[i]: value for i, value in enumerate(result)}
-
             if self._model_class is not None:
+                column_names = [desc[0] for desc in cursor.description]
+                row_dict = {column_names[i]: value for i, value in enumerate(result)}
                 try:
                     return self._model_class(**row_dict)
                 except Exception as e:
                     raise ValueError(
                         f"Failed to map row to {self._model_class.__name__}: {e}"
                     )
-            return row_dict
+
+            if len(result) == 1:
+                return result[0]
+
+            return result
 
         return cursor.rowcount
 
@@ -509,7 +492,7 @@ class UpdateQuery(Query[int]):
         set_parts = [f"{col} = %s" for col in self._values.keys()]
         values = list(self._values.values())
 
-        query = f"UPDATE {self._table.name} SET {', '.join(set_parts)}"
+        query = f"UPDATE {self._table._alias} SET {', '.join(set_parts)}"
 
         where_clause, where_params = self.build_where_clause()
         query += where_clause
@@ -522,7 +505,7 @@ class UpdateQuery(Query[int]):
                         raise ValueError(
                             "Column table cannot be None when building RETURNING clause"
                         )
-                    returning_parts.append(f"{col.table.name}.{col.name}")
+                    returning_parts.append(f"{col.table._alias}.{col.name}")
                 else:
                     returning_parts.append(str(col))
             query += f" RETURNING {', '.join(returning_parts)}"
@@ -569,7 +552,7 @@ class DeleteQuery(Query[int]):
         return self
 
     def build(self) -> Tuple[str, List[Any]]:
-        query = f"DELETE FROM {self._table.name}"
+        query = f"DELETE FROM {self._table._alias}"
 
         where_clause, where_params = self.build_where_clause()
         query += where_clause
@@ -582,7 +565,7 @@ class DeleteQuery(Query[int]):
                         raise ValueError(
                             "Column table cannot be None when building RETURNING clause"
                         )
-                    returning_parts.append(f"{col.table.name}.{col.name}")
+                    returning_parts.append(f"{col.table._alias}.{col.name}")
                 else:
                     returning_parts.append(str(col))
             query += f" RETURNING {', '.join(returning_parts)}"
@@ -629,9 +612,56 @@ class Database:
         else:
             self.connection_provider = cast(ConnectionProvider, connection_provider)
 
-    def select(self, *columns: Union[str, _Column[Any]]) -> SelectQuery:
+    @overload
+    def select(self, __c1: _Column[T1]) -> SelectQuery[T1]: ...
+
+    @overload
+    def select(
+        self, __c1: _Column[T1], __c2: _Column[T2]
+    ) -> SelectQuery[Tuple[T1, T2]]: ...
+
+    @overload
+    def select(
+        self, __c1: _Column[T1], __c2: _Column[T2], __c3: _Column[T3]
+    ) -> SelectQuery[Tuple[T1, T2, T3]]: ...
+
+    @overload
+    def select(
+        self, __c1: _Column[T1], __c2: _Column[T2], __c3: _Column[T3], __c4: _Column[T4]
+    ) -> SelectQuery[Tuple[T1, T2, T3, T4]]: ...
+
+    @overload
+    def select(
+        self,
+        __c1: _Column[T1],
+        __c2: _Column[T2],
+        __c3: _Column[T3],
+        __c4: _Column[T4],
+        __c5: _Column[T5],
+    ) -> SelectQuery[Tuple[T1, T2, T3, T4, T5]]: ...
+
+    @overload
+    def select(self, __entity: Type[TableT]) -> SelectQuery[TableT]: ...
+
+    def select(
+        self, *columns: Union[str, _Column[Any], Type[PgTable]]
+    ) -> SelectQuery[Any]:
+        if columns and isinstance(columns[0], type) and issubclass(columns[0], PgTable):
+            table_class = columns[0]
+            instance = table_class()
+            return (
+                SelectQuery(self.connection_provider)
+                .select(*instance.get_columns().keys())
+                .from_(instance)
+                .map_to(table_class)
+            )
+        clean_columns = [c for c in columns if isinstance(c, (str, _Column))]
+        if len(clean_columns) != len(columns):
+            raise TypeError(
+                "Invalid argument for select. Cannot mix table classes with columns."
+            )
         query = SelectQuery(self.connection_provider)
-        return query.select(*columns)
+        return query.select(*clean_columns)
 
     def insert(self, table: PgTable) -> InsertQuery:
         return InsertQuery(self.connection_provider, table)

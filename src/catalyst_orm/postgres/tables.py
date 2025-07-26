@@ -6,6 +6,7 @@ from typing import (
     Optional,
     List,
     ClassVar,
+    Type,
 )
 from .column_types import PostgresType
 
@@ -14,7 +15,9 @@ TableT = TypeVar("TableT", bound="PgTable")
 
 
 class _Column(Generic[T]):
-    def __init__(self, sql_type: PostgresType, name: Optional[str] = None):
+    def __init__(
+        self, sql_type: Optional[PostgresType] = None, name: Optional[str] = None
+    ):
         self.sql_type = sql_type
         self.name = name
         self.table: Optional[PgTable] = None
@@ -25,7 +28,8 @@ class _Column(Generic[T]):
         self._default_value = None
         self._default_expr = None
 
-        sql_type.extends_column(self)
+        if sql_type:
+            sql_type.extends_column(self)
 
     def primary(self) -> "_Column[T]":
         self._is_primary = True
@@ -63,7 +67,7 @@ class _Column(Generic[T]):
         return _ColumnAlias(self, alias_name)
 
     def __repr__(self) -> str:
-        table_name = self.table.name if self.table else "unbound"
+        table_name = self.table._alias if self.table is not None else "unbound"
         return f"<Column {table_name}.{self.name}>"
 
     def __str__(self) -> str:
@@ -73,7 +77,7 @@ class _Column(Generic[T]):
         column_name = self.name if self.name is not None else ""
 
         if self.table is not None:
-            table_name = self.table.__tablename__
+            table_name = self.table._alias
         else:
             table_name = "unknown"
 
@@ -103,10 +107,14 @@ class RelationReference:
 
     def __repr__(self):
         source_name = (
-            self.source_table.name if hasattr(self.source_table, "name") else "unknown"
+            self.source_table._alias
+            if hasattr(self.source_table, "_alias")
+            else "unknown"
         )
         target_name = (
-            self.target_table.name if hasattr(self.target_table, "name") else "unknown"
+            self.target_table._alias
+            if hasattr(self.target_table, "_alias")
+            else "unknown"
         )
         return f"<Relation {source_name}.{self.relation_name} -> {target_name}>"
 
@@ -120,8 +128,8 @@ class TableMetaclass(type):
         if table_name is None:
             import re
 
-            s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
-            table_name = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+            s1 = re.sub("(.)([A-Z][a-z]+)", r"\\1_\\2", name)
+            table_name = re.sub("([a-z0-9])([A-Z])", r"\\1_\\2", s1).lower()
 
         columns = {}
         primary_keys = []
@@ -153,7 +161,7 @@ class PgTable(metaclass=TableMetaclass):
     __primary_keys__: ClassVar[List[_Column]] = []
 
     def __init__(self, name: Optional[str] = None):
-        self.name = name or self.__tablename__
+        self._alias = name or self.__tablename__
         self._columns = {}
         self._primary_keys = []
         self._relations = {}
@@ -168,14 +176,14 @@ class PgTable(metaclass=TableMetaclass):
             column_copy._default_value = column._default_value
             column_copy._default_expr = column._default_expr
 
-            self._columns[column.name] = column_copy
+            self._columns[column.name or attr_name] = column_copy
             setattr(self, attr_name, column_copy)
 
             if column_copy._is_primary:
                 self._primary_keys.append(column_copy)
 
-    def column(self, name: str, sql_type: PostgresType) -> _Column[Any]:
-        column_instance = _Column(sql_type, name)
+    def column(self, name: str, sql_type: Type[PostgresType], **kwargs) -> Any:
+        column_instance = _Column(sql_type(**kwargs), name=name)
         column_instance.table = self
         self._columns[name] = column_instance
         return column_instance
@@ -191,7 +199,9 @@ class PgTable(metaclass=TableMetaclass):
         constraints = []
 
         for name, column in self._columns.items():
-            column_def = f"{name} {column.sql_type.sql_type_name}"
+            column_def = (
+                f"{name} {column.sql_type.sql_type_name if column.sql_type else ''}"
+            )
 
             if not column._is_nullable:
                 column_def += " NOT NULL"
@@ -210,15 +220,15 @@ class PgTable(metaclass=TableMetaclass):
 
             if column._is_unique:
                 constraints.append(
-                    f"CONSTRAINT {self.name}_{name}_unique UNIQUE ({name})"
+                    f"CONSTRAINT {self._alias}_{name}_unique UNIQUE ({name})"
                 )
 
         if self._primary_keys:
-            pk_names = [pk.name for pk in self._primary_keys]
+            pk_names = [pk.name for pk in self._primary_keys if pk.name is not None]
             constraints.append(f"PRIMARY KEY ({', '.join(pk_names)})")
 
         all_parts = column_defs + constraints
-        return f"CREATE TABLE {self.name} (\n  " + ",\n  ".join(all_parts) + "\n);"
+        return f"CREATE TABLE {self._alias} (\n  " + ",\n  ".join(all_parts) + "\n);"
 
     def has_one(self, relation_name: str, target_table: "PgTable", **kwargs):
         from ..relationships import Relation
@@ -279,11 +289,11 @@ class PgTable(metaclass=TableMetaclass):
         return relation
 
     def __repr__(self) -> str:
-        return f"<Table {self.__tablename__}>"
+        return f"<Table {self._alias}>"
 
     def __str__(self) -> str:
-        return self.__tablename__ or ""
+        return self._alias or ""
 
 
-def column(sql_type: PostgresType) -> _Column:
-    return _Column(sql_type)
+def column(name: str, sql_type: Type[PostgresType], **kwargs) -> Any:
+    return _Column(sql_type(**kwargs), name=name)

@@ -1,7 +1,29 @@
-__version__ = "0.0.1-alpha.1"
+__version__ = "0.0.1-alpha.2"
 
-from .query_builder import Query, SelectQuery, InsertQuery, UpdateQuery, DeleteQuery
-from .postgres.tables import PgTable, column
+from .query_builder import (
+    Query,
+    SelectQuery,
+    InsertQuery,
+    UpdateQuery,
+    DeleteQuery,
+    Database,
+)
+from .postgres.tables import PgTable
+from .columns import (
+    Text,
+    Varchar,
+    Integer,
+    BigInteger,
+    UUID,
+    JSONB,
+    Boolean,
+    Timestamp,
+    Date,
+    Time,
+    Serial,
+    BigSerial,
+    Numeric,
+)
 from .conditions import (
     eq,
     ne,
@@ -12,6 +34,11 @@ from .conditions import (
     in_,
     not_in,
     like,
+    not_like,
+    is_null,
+    is_not_null,
+    and_,
+    or_,
 )
 
 __all__ = [
@@ -20,8 +47,21 @@ __all__ = [
     "InsertQuery",
     "UpdateQuery",
     "DeleteQuery",
+    "Database",
     "PgTable",
-    "column",
+    "Text",
+    "Varchar",
+    "Integer",
+    "BigInteger",
+    "UUID",
+    "JSONB",
+    "Boolean",
+    "Timestamp",
+    "Date",
+    "Time",
+    "Serial",
+    "BigSerial",
+    "Numeric",
     "eq",
     "ne",
     "gt",
@@ -31,4 +71,9 @@ __all__ = [
     "in_",
     "not_in",
     "like",
+    "not_like",
+    "is_null",
+    "is_not_null",
+    "and_",
+    "or_",
 ]
